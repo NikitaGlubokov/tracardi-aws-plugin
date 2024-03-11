@@ -14,7 +14,7 @@ def validate(config: dict) -> Config:
     return Config(**config)
 
 
-class S3SegmentsMetadataUploaderPlugin(ActionRunner):
+class S3SegmentsUploaderPlugin(ActionRunner):
     config: Config
 
     async def set_up(self, config):
@@ -27,12 +27,9 @@ class S3SegmentsMetadataUploaderPlugin(ActionRunner):
             aws_secret_access_key=self.config.aws_secret_access_key
         )
         temp_segments_filename = None
-        temp_metadata_filename = None
         try:
             segments_filename = self._generate_filename("segments")
-            metadata_filename = self._generate_filename("metadata")
             segments_exists = self._check_s3_keys_exist(s3, self.config.s3_bucket, segments_filename)
-            metadata_exists = self._check_s3_keys_exist(s3, self.config.s3_bucket, metadata_filename)
 
             segments_data = {"profiles": [{"smi_uid": payload['traits']['smi_uid'], "segments": payload['segments']}]}
             if segments_exists:
@@ -45,16 +42,6 @@ class S3SegmentsMetadataUploaderPlugin(ActionRunner):
                 segments_data = existing_segments_data
             self._upload_file_to_s3(s3, self.config.s3_bucket, segments_filename, segments_data)
 
-            metadata_data = {"profiles": [{"segments": payload['segments']}]}
-            if metadata_exists:
-                temp_metadata_filename = self._download_s3_file(s3, self.config.s3_bucket, metadata_filename)
-                with open(temp_metadata_filename, 'r') as metadata_file:
-                    existing_metadata_data = json.load(metadata_file)
-                    existing_metadata_data['profiles'].append({"segments": payload['segments']})
-                metadata_data = existing_metadata_data
-
-            self._upload_file_to_s3(s3, self.config.s3_bucket, metadata_filename, metadata_data)
-
             return Result(port="UploadSuccess",
                           value={"message": "JSON data uploaded to S3."})
 
@@ -62,9 +49,8 @@ class S3SegmentsMetadataUploaderPlugin(ActionRunner):
             return Result(port="UploadError", value={"error": f"S3 upload error: {err}"})
 
         finally:
-            if os.path.exists(temp_segments_filename) and os.path.exists(temp_metadata_filename):
+            if os.path.exists(temp_segments_filename):
                 os.remove(temp_segments_filename)
-                os.remove(temp_metadata_filename)
 
     @staticmethod
     def _check_s3_keys_exist(s3_client, bucket: str, keys_to_check: list | str) -> bool:
@@ -99,7 +85,7 @@ def register() -> Plugin:
         start=False,
         spec=Spec(
             module=__name__,
-            className=S3SegmentsMetadataUploaderPlugin.__name__,
+            className=S3SegmentsUploaderPlugin.__name__,
             init={
                 "aws_access_key_id": "",
                 "aws_secret_access_key": "",
@@ -137,8 +123,8 @@ def register() -> Plugin:
             author="Eqwile"
         ),
         metadata=MetaData(
-            name="S3 Segments and Metadata Uploader Plugin",
-            desc='Uploads user profile data to S3 as JSON.',
+            name="S3 Segments Uploader Plugin",
+            desc='Uploads user profile segments to S3 as JSON.',
             group=["AWS"],
             purpose=['collection', 'segmentation']
         )
