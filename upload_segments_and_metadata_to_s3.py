@@ -137,7 +137,7 @@ def register() -> Plugin:
             author="Eqwile"
         ),
         metadata=MetaData(
-            name="S3 Uploader Plugin",
+            name="S3 Segments and Metadata Uploader Plugin",
             desc='Uploads user profile data to S3 as JSON.',
             group=["AWS"],
             purpose=['collection', 'segmentation']
