@@ -5,7 +5,7 @@ from tracardi.service.plugin.domain.register import Form, FormGroup, FormField, 
 from .config import Config
 from datetime import datetime
 import json
-import boto3
+from aiobotocore.session import get_session
 import tempfile
 import os
 
@@ -20,60 +20,66 @@ class S3SegmentsUploaderPlugin(ActionRunner):
     async def set_up(self, config):
         self.config = validate(config)
 
-    async def run(self, payload: dict, in_edge=None):
-        s3 = boto3.client(
-            's3',
-            aws_access_key_id=self.config.aws_access_key_id,
-            aws_secret_access_key=self.config.aws_secret_access_key
-        )
-        temp_segments_filename = ""
+        async def run(self, payload: dict, in_edge=None):
+        session = get_session()
         try:
-            segments_filename = self._generate_filename("segments")
-            segments_exists = self._check_s3_keys_exist(s3, self.config.s3_bucket, segments_filename)
+            async with session.create_client('s3',
+                                             aws_secret_access_key=self.config.aws_secret_access_key,
+                                             aws_access_key_id=self.config.aws_access_key_id) as s3:
+                temp_segments_filename = ""
+                segments_filename = self._generate_filename("segments")
+                segments_exists = await self._check_s3_keys_exist(s3, self.config.s3_bucket, segments_filename)
 
-            segments_data = {"profiles": [{"smi_uid": payload['traits']['smi_uid'], "segments": payload['segments']}]}
-            if segments_exists:
-                temp_segments_filename = self._download_s3_file(s3, self.config.s3_bucket, segments_filename)
-                with open(temp_segments_filename, 'r') as segments_file:
-                    existing_segments_data = json.load(segments_file)
-                    existing_segments_data['profiles'].append(
-                        {"smi_uid": payload['traits']['smi_uid'], "segments": payload['segments']}
-                    )
-                segments_data = existing_segments_data
-            self._upload_file_to_s3(s3, self.config.s3_bucket, segments_filename, segments_data)
-
-            return Result(port="UploadSuccess",
-                          value={"message": "JSON data uploaded to S3."})
+                segments_data = {
+                    "profiles": [{"smi_uid": payload['traits']['smi_uid'], "segments": payload['segments']}]}
+                if segments_exists:
+                    temp_segments_filename = await self._download_s3_file(s3, self.config.s3_bucket,
+                                                                          segments_filename)
+                    with open(temp_segments_filename, 'r') as segments_file:
+                        existing_segments_data = json.load(segments_file)
+                        existing_segments_data['profiles'].append(
+                            {"smi_uid": payload['traits']['smi_uid'], "segments": payload['segments']}
+                        )
+                    segments_data = existing_segments_data
+                await self._upload_file_to_s3(s3, self.config.s3_bucket, segments_filename, segments_data)
+                return Result(port="UploadSuccess", value={"message": "JSON data uploaded to S3."})
 
         except Exception as err:
             return Result(port="UploadError", value={"error": f"S3 upload error: {err}"})
-
         finally:
             if os.path.exists(temp_segments_filename):
                 os.remove(temp_segments_filename)
 
+
     @staticmethod
-    def _check_s3_keys_exist(s3_client, bucket: str, keys_to_check: list | str) -> bool:
-        response = s3_client.list_objects_v2(Bucket=bucket)
+    async def _check_s3_keys_exist(s3_client, bucket: str, keys_to_check: list | str) -> bool:
+        response = await s3_client.list_objects_v2(Bucket=bucket)
         if 'Contents' in response:
             existing_keys = {item['Key'] for item in response['Contents']}
             return keys_to_check in existing_keys
         return False
 
+
     @staticmethod
-    def _upload_file_to_s3(s3_client, bucket: str, filename: str, json_data: dict) -> None:
-        s3_client.put_object(
+    async def _upload_file_to_s3(s3_client, bucket: str, filename: str, json_data: dict) -> None:
+        await s3_client.put_object(
             Bucket=bucket,
             Key=filename,
             Body=json.dumps(json_data)
         )
 
+
     @staticmethod
-    def _download_s3_file(s3_client, bucket: str, filename: str) -> str:
+    async def _download_s3_file(s3_client, bucket: str, filename: str) -> str:
         with tempfile.NamedTemporaryFile(delete=False) as temp_file:
             temp_filename = temp_file.name
-            s3_client.download_file(bucket, filename, temp_filename)
+            response = await s3_client.get_object(Bucket=bucket, Key=filename)
+            async with response['Body'] as stream:
+                obj = await stream.read()
+                with open(temp_filename, 'wb') as file:
+                    file.write(obj)
             return temp_filename
+
 
     @staticmethod
     def _generate_filename(prefix: str) -> str:
