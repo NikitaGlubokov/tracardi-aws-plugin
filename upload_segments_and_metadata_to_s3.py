@@ -26,7 +26,7 @@ class S3SegmentsUploaderPlugin(ActionRunner):
             aws_access_key_id=self.config.aws_access_key_id,
             aws_secret_access_key=self.config.aws_secret_access_key
         )
-        temp_segments_filename = None
+        temp_segments_filename = ""
         try:
             segments_filename = self._generate_filename("segments")
             segments_exists = self._check_s3_keys_exist(s3, self.config.s3_bucket, segments_filename)
