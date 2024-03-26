@@ -1,13 +1,13 @@
+import json
+from aiobotocore.session import get_session
+import tempfile
+import os
+from datetime import datetime
 from tracardi.service.plugin.runner import ActionRunner
 from tracardi.service.plugin.domain.result import Result
 from tracardi.service.plugin.domain.register import Plugin, Spec, MetaData
 from tracardi.service.plugin.domain.register import Form, FormGroup, FormField, FormComponent
 from .config import Config
-from datetime import datetime
-import json
-from aiobotocore.session import get_session
-import tempfile
-import os
 
 
 def validate(config: dict) -> Config:
@@ -20,9 +20,9 @@ class S3SegmentsUploaderPlugin(ActionRunner):
     async def set_up(self, config):
         self.config = validate(config)
 
-        async def run(self, payload: dict, in_edge=None):
-        session = get_session()
+    async def run(self, payload: dict, in_edge=None):
         try:
+            session = get_session()
             async with session.create_client('s3',
                                              aws_secret_access_key=self.config.aws_secret_access_key,
                                              aws_access_key_id=self.config.aws_access_key_id) as s3:
@@ -30,8 +30,12 @@ class S3SegmentsUploaderPlugin(ActionRunner):
                 segments_filename = self._generate_filename("segments")
                 segments_exists = await self._check_s3_keys_exist(s3, self.config.s3_bucket, segments_filename)
 
+                if 'traits' not in payload or 'smi_uid' not in payload['traits']:
+                    return Result(port="error", value={"error": f"Could not find payload.traits.smi_uid"})
+
                 segments_data = {
-                    "profiles": [{"smi_uid": payload['traits']['smi_uid'], "segments": payload['segments']}]}
+                    "profiles": [{"smi_uid": payload['traits']['smi_uid'], "segments": payload['segments']}]
+                }
                 if segments_exists:
                     temp_segments_filename = await self._download_s3_file(s3, self.config.s3_bucket,
                                                                           segments_filename)
@@ -42,14 +46,15 @@ class S3SegmentsUploaderPlugin(ActionRunner):
                         )
                     segments_data = existing_segments_data
                 await self._upload_file_to_s3(s3, self.config.s3_bucket, segments_filename, segments_data)
-                return Result(port="UploadSuccess", value={"message": "JSON data uploaded to S3."})
+
+                return Result(port="success", value={"message": "JSON data uploaded to S3."})
 
         except Exception as err:
-            return Result(port="UploadError", value={"error": f"S3 upload error: {err}"})
+            return Result(port="error", value={"error": f"S3 upload error: {err}"})
+
         finally:
             if os.path.exists(temp_segments_filename):
                 os.remove(temp_segments_filename)
-
 
     @staticmethod
     async def _check_s3_keys_exist(s3_client, bucket: str, keys_to_check: list | str) -> bool:
@@ -59,7 +64,6 @@ class S3SegmentsUploaderPlugin(ActionRunner):
             return keys_to_check in existing_keys
         return False
 
-
     @staticmethod
     async def _upload_file_to_s3(s3_client, bucket: str, filename: str, json_data: dict) -> None:
         await s3_client.put_object(
@@ -67,7 +71,6 @@ class S3SegmentsUploaderPlugin(ActionRunner):
             Key=filename,
             Body=json.dumps(json_data)
         )
-
 
     @staticmethod
     async def _download_s3_file(s3_client, bucket: str, filename: str) -> str:
@@ -79,7 +82,6 @@ class S3SegmentsUploaderPlugin(ActionRunner):
                 with open(temp_filename, 'wb') as file:
                     file.write(obj)
             return temp_filename
-
 
     @staticmethod
     def _generate_filename(prefix: str) -> str:
@@ -97,6 +99,8 @@ def register() -> Plugin:
                 "aws_secret_access_key": "",
                 "s3_bucket": ""
             },
+            version='0.9.0',
+            manual='s3_segment_upload',
             form=Form(groups=[
                 FormGroup(
                     name="S3 Upload Configuration",
@@ -124,7 +128,7 @@ def register() -> Plugin:
                 ),
             ]),
             inputs=["payload"],
-            outputs=["UploadSuccess", "UploadError"],
+            outputs=["success", "error"],
             license="MIT",
             author="Eqwile"
         ),
@@ -132,6 +136,7 @@ def register() -> Plugin:
             name="S3 Segments Uploader Plugin",
             desc='Uploads user profile segments to S3 as JSON.',
             group=["AWS"],
-            purpose=['collection', 'segmentation']
+            purpose=['collection', 'segmentation'],
+            icon="aws"
         )
     )
